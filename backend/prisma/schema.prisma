@@ -1,0 +1,519 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema", "partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["audit", "monitoring", "nexa"]
+}
+
+/// This table is a partition table and requires additional setup for migrations. Visit https://pris.ly/d/partition-tables for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model audit_logs {
+  id            BigInt       @default(autoincrement())
+  occurred_at   DateTime     @default(now()) @db.Timestamptz(6)
+  user_id       String?      @db.Uuid
+  user_email    String?      @db.VarChar(255)
+  user_role     String?
+  ip_address    String?      @db.Inet
+  user_agent    String?
+  action        audit_action
+  schema_name   String?      @db.VarChar(100)
+  table_name    String?      @db.VarChar(100)
+  record_id     String?
+  old_values    Json?
+  new_values    Json?
+  context       Json?
+  success       Boolean      @default(true)
+  error_message String?
+
+  @@id([id, occurred_at])
+  @@index([action], map: "idx_audit_action")
+  @@index([occurred_at(sort: Desc)], map: "idx_audit_occurred_at")
+  @@index([table_name, schema_name], map: "idx_audit_table")
+  @@index([table_name, action, occurred_at(sort: Desc)], map: "idx_audit_table_action")
+  @@index([user_id, occurred_at(sort: Desc)], map: "idx_audit_user_date", where: raw("(user_id IS NOT NULL)"))
+  @@index([user_id], map: "idx_audit_user_id", where: raw("(user_id IS NOT NULL)"))
+  @@schema("audit")
+}
+
+model backup_log {
+  id            BigInt    @id @default(autoincrement())
+  started_at    DateTime  @db.Timestamptz(6)
+  completed_at  DateTime? @db.Timestamptz(6)
+  backup_type   String
+  destination   String
+  size_bytes    BigInt?
+  success       Boolean   @default(false)
+  error_message String?
+  duration_secs Decimal?  @default(dbgenerated("EXTRACT(epoch FROM (completed_at - started_at))")) @db.Decimal
+
+  @@schema("monitoring")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model sla_alerts {
+  id           BigInt   @id @default(autoincrement())
+  ticket_id    String   @db.Uuid
+  alert_type   String
+  triggered_at DateTime @default(now()) @db.Timestamptz(6)
+  notified     Boolean  @default(false)
+  tickets      tickets  @relation(fields: [ticket_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([ticket_id, alert_type], map: "sla_alerts_unique")
+  @@schema("monitoring")
+}
+
+model slow_query_log {
+  id            BigInt   @id @default(autoincrement())
+  logged_at     DateTime @default(now()) @db.Timestamptz(6)
+  query_text    String
+  duration_ms   Decimal  @db.Decimal
+  user_name     String?
+  database_name String?
+  rows_examined BigInt?
+
+  @@schema("monitoring")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model contract_signatures {
+  id                   String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  contract_id          String    @db.Uuid
+  user_id              String    @db.Uuid
+  signature_image      String?
+  ip_address           String    @db.Inet
+  content_hash_at_sign String    @db.VarChar(64)
+  signed_at            DateTime  @default(now()) @db.Timestamptz(6)
+  contracts            contracts @relation(fields: [contract_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users                users     @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([contract_id, user_id], map: "contract_signatures_unique")
+  @@schema("nexa")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model contract_versions {
+  id             String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  contract_id    String    @db.Uuid
+  version_number Int       @db.SmallInt
+  content        String
+  content_hash   String    @db.VarChar(64)
+  created_by     String    @db.Uuid
+  created_at     DateTime  @default(now()) @db.Timestamptz(6)
+  contracts      contracts @relation(fields: [contract_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users          users     @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([contract_id, version_number], map: "contract_versions_unique")
+  @@index([contract_id], map: "idx_contract_versions_contract")
+  @@schema("nexa")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model contracts {
+  id                  String                @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  project_id          String                @db.Uuid
+  title               String                @db.VarChar(255)
+  content             String
+  content_hash        String                @db.VarChar(64)
+  status              contract_status       @default(PENDING)
+  created_by          String                @db.Uuid
+  created_at          DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime              @default(now()) @db.Timestamptz(6)
+  contract_signatures contract_signatures[]
+  contract_versions   contract_versions[]
+  users               users                 @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  projects            projects              @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([project_id], map: "idx_contracts_project")
+  @@index([status], map: "idx_contracts_status")
+  @@schema("nexa")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model demand_assignees {
+  id                                        String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  demand_id                                 String   @db.Uuid
+  user_id                                   String   @db.Uuid
+  assigned_at                               DateTime @default(now()) @db.Timestamptz(6)
+  assigned_by                               String   @db.Uuid
+  users_demand_assignees_assigned_byTousers users    @relation("demand_assignees_assigned_byTousers", fields: [assigned_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  demands                                   demands  @relation(fields: [demand_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_demand_assignees_user_idTousers     users    @relation("demand_assignees_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([demand_id, user_id], map: "demand_assignees_unique")
+  @@index([demand_id], map: "idx_demand_assignees_demand")
+  @@index([user_id], map: "idx_demand_assignees_user")
+  @@schema("nexa")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model demand_files {
+  id              String           @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  demand_id       String?          @db.Uuid
+  subfolder       demand_subfolder
+  file_name       String           @db.VarChar(500)
+  file_key        String           @unique
+  file_size_bytes BigInt
+  mime_type       String           @db.VarChar(255)
+  uploaded_by     String           @db.Uuid
+  created_at      DateTime         @default(now()) @db.Timestamptz(6)
+  project_id      String?          @db.Uuid
+  demands         demands?         @relation(fields: [demand_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  projects        projects?        @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users           users            @relation(fields: [uploaded_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([demand_id], map: "idx_demand_files_demand")
+  @@index([project_id], map: "idx_demand_files_project", where: raw("(project_id IS NOT NULL)"))
+  @@index([subfolder], map: "idx_demand_files_subfolder")
+  @@schema("nexa")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model demands {
+  id               String             @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  project_id       String             @db.Uuid
+  title            String             @db.VarChar(255)
+  description      String?
+  deadline         DateTime           @db.Timestamptz(6)
+  status           demand_status      @default(PENDING)
+  created_by       String             @db.Uuid
+  created_at       DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime           @default(now()) @db.Timestamptz(6)
+  demand_assignees demand_assignees[]
+  demand_files     demand_files[]
+  users            users              @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  projects         projects           @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([deadline], map: "idx_demands_deadline")
+  @@index([description(ops: raw("gin_trgm_ops"))], map: "idx_demands_desc_trgm", type: Gin)
+  @@index([project_id], map: "idx_demands_project")
+  @@index([status], map: "idx_demands_status")
+  @@index([title(ops: raw("gin_trgm_ops"))], map: "idx_demands_title_trgm", type: Gin)
+  @@schema("nexa")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model financial_entries {
+  id                                        String           @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  type                                      financial_type
+  description                               String           @db.VarChar(500)
+  amount_cents                              BigInt
+  due_date                                  DateTime         @db.Date
+  status                                    financial_status @default(PENDING)
+  category                                  String?          @db.VarChar(100)
+  project_id                                String?          @db.Uuid
+  created_by                                String           @db.Uuid
+  created_at                                DateTime         @default(now()) @db.Timestamptz(6)
+  updated_at                                DateTime         @default(now()) @db.Timestamptz(6)
+  paid_at                                   DateTime?        @db.Timestamptz(6)
+  paid_by                                   String?          @db.Uuid
+  users_financial_entries_created_byTousers users            @relation("financial_entries_created_byTousers", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_financial_entries_paid_byTousers    users?           @relation("financial_entries_paid_byTousers", fields: [paid_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  projects                                  projects?        @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([due_date], map: "idx_financial_due_date")
+  @@index([project_id], map: "idx_financial_project", where: raw("(project_id IS NOT NULL)"))
+  @@index([status], map: "idx_financial_status")
+  @@index([type], map: "idx_financial_type")
+  @@schema("nexa")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model notifications {
+  id            String            @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  user_id       String            @db.Uuid
+  type          notification_type
+  title         String            @db.VarChar(255)
+  body          String?
+  related_table String?           @db.VarChar(100)
+  related_id    String?           @db.Uuid
+  is_read       Boolean           @default(false)
+  read_at       DateTime?         @db.Timestamptz(6)
+  created_at    DateTime          @default(now()) @db.Timestamptz(6)
+  users         users             @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id], map: "idx_notifications_unread", where: raw("(is_read = false)"))
+  @@index([user_id, is_read, created_at(sort: Desc)], map: "idx_notifications_user")
+  @@schema("nexa")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model professor_comments {
+  id                                        String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  target_id                                 String   @db.Uuid
+  author_id                                 String   @db.Uuid
+  comment                                   String
+  created_at                                DateTime @default(now()) @db.Timestamptz(6)
+  updated_at                                DateTime @default(now()) @db.Timestamptz(6)
+  users_professor_comments_author_idTousers users    @relation("professor_comments_author_idTousers", fields: [author_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_professor_comments_target_idTousers users    @relation("professor_comments_target_idTousers", fields: [target_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@schema("nexa")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model profitability_goals {
+  id           String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  user_id      String   @db.Uuid
+  month        String   @db.Char(7)
+  target_cents BigInt
+  actual_cents BigInt   @default(0)
+  created_at   DateTime @default(now()) @db.Timestamptz(6)
+  updated_at   DateTime @default(now()) @db.Timestamptz(6)
+  users        users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, month], map: "profitability_goals_unique_month")
+  @@schema("nexa")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model project_members {
+  id           String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  project_id   String   @db.Uuid
+  user_id      String   @db.Uuid
+  assigned_at  DateTime @default(now()) @db.Timestamptz(6)
+  productivity Decimal  @default(0.00) @db.Decimal(5, 2)
+  progress     Decimal  @default(0.00) @db.Decimal(5, 2)
+  projects     projects @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users        users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([project_id, user_id], map: "project_members_unique")
+  @@index([project_id], map: "idx_project_members_project")
+  @@index([user_id], map: "idx_project_members_user")
+  @@schema("nexa")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model projects {
+  id                              String              @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name                            String              @db.VarChar(255)
+  description                     String?
+  deadline                        DateTime            @db.Timestamptz(6)
+  status                          project_status      @default(ACTIVE)
+  owner_id                        String              @db.Uuid
+  client_id                       String?             @db.Uuid
+  created_at                      DateTime            @default(now()) @db.Timestamptz(6)
+  updated_at                      DateTime            @default(now()) @db.Timestamptz(6)
+  contracts                       contracts[]
+  demand_files                    demand_files[]
+  demands                         demands[]
+  financial_entries               financial_entries[]
+  project_members                 project_members[]
+  users_projects_client_idTousers users?              @relation("projects_client_idTousers", fields: [client_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_projects_owner_idTousers  users               @relation("projects_owner_idTousers", fields: [owner_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tickets                         tickets[]
+
+  @@index([client_id], map: "idx_projects_client", where: raw("(client_id IS NOT NULL)"))
+  @@index([deadline], map: "idx_projects_deadline")
+  @@index([owner_id], map: "idx_projects_owner")
+  @@index([status], map: "idx_projects_status")
+  @@schema("nexa")
+}
+
+model ticket_responses {
+  id         String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  ticket_id  String   @db.Uuid
+  author_id  String   @db.Uuid
+  message    String
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  users      users    @relation(fields: [author_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tickets    tickets  @relation(fields: [ticket_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@schema("nexa")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model tickets {
+  id               String             @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  project_id       String?            @db.Uuid
+  creator_id       String             @db.Uuid
+  subject          String             @db.VarChar(500)
+  description      String
+  status           ticket_status      @default(OPEN)
+  sla_deadline     DateTime           @db.Timestamptz(6)
+  created_at       DateTime           @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime           @default(now()) @db.Timestamptz(6)
+  sla_alerts       sla_alerts[]
+  ticket_responses ticket_responses[]
+  users            users              @relation(fields: [creator_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  projects         projects?          @relation(fields: [project_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([creator_id], map: "idx_tickets_creator")
+  @@index([project_id], map: "idx_tickets_project", where: raw("(project_id IS NOT NULL)"))
+  @@index([sla_deadline], map: "idx_tickets_sla", where: raw("(status = ANY (ARRAY['OPEN'::nexa.ticket_status, 'IN_PROGRESS'::nexa.ticket_status]))"))
+  @@index([status], map: "idx_tickets_status")
+  @@schema("nexa")
+}
+
+model user_sessions {
+  id                 String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  user_id            String   @db.Uuid
+  refresh_token_hash String   @unique @db.VarChar(64)
+  ip_address         String   @db.Inet
+  user_agent         String?
+  expires_at         DateTime @db.Timestamptz(6)
+  is_revoked         Boolean  @default(false)
+  created_at         DateTime @default(now()) @db.Timestamptz(6)
+  users              users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([expires_at], map: "idx_sessions_expires", where: raw("(is_revoked = false)"))
+  @@index([user_id, is_revoked, expires_at], map: "idx_sessions_user_active", where: raw("(is_revoked = false)"))
+  @@index([user_id], map: "idx_sessions_user_id")
+  @@schema("nexa")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model users {
+  id                                                     String                @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  email                                                  String                @unique(map: "users_email_unique") @db.VarChar(255)
+  password_hash                                          String
+  name                                                   String                @db.VarChar(255)
+  role                                                   user_role
+  avatar_url                                             String?
+  cpf_cnpj_encrypted                                     Bytes?
+  cpf_cnpj_hash                                          String?               @unique @db.VarChar(64)
+  is_active                                              Boolean               @default(true)
+  password_needs_change                                  Boolean               @default(false)
+  last_login_at                                          DateTime?             @db.Timestamptz(6)
+  failed_login_count                                     Int                   @default(0) @db.SmallInt
+  locked_until                                           DateTime?             @db.Timestamptz(6)
+  reset_token_hash                                       String?               @db.VarChar(64)
+  reset_token_expires                                    DateTime?             @db.Timestamptz(6)
+  created_at                                             DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at                                             DateTime              @default(now()) @db.Timestamptz(6)
+  contract_signatures                                    contract_signatures[]
+  contract_versions                                      contract_versions[]
+  contracts                                              contracts[]
+  demand_assignees_demand_assignees_assigned_byTousers   demand_assignees[]    @relation("demand_assignees_assigned_byTousers")
+  demand_assignees_demand_assignees_user_idTousers       demand_assignees[]    @relation("demand_assignees_user_idTousers")
+  demand_files                                           demand_files[]
+  demands                                                demands[]
+  financial_entries_financial_entries_created_byTousers  financial_entries[]   @relation("financial_entries_created_byTousers")
+  financial_entries_financial_entries_paid_byTousers     financial_entries[]   @relation("financial_entries_paid_byTousers")
+  notifications                                          notifications[]
+  professor_comments_professor_comments_author_idTousers professor_comments[]  @relation("professor_comments_author_idTousers")
+  professor_comments_professor_comments_target_idTousers professor_comments[]  @relation("professor_comments_target_idTousers")
+  profitability_goals                                    profitability_goals[]
+  project_members                                        project_members[]
+  projects_projects_client_idTousers                     projects[]            @relation("projects_client_idTousers")
+  projects_projects_owner_idTousers                      projects[]            @relation("projects_owner_idTousers")
+  ticket_responses                                       ticket_responses[]
+  tickets                                                tickets[]
+  user_sessions                                          user_sessions[]
+
+  @@index([is_active], map: "idx_users_active", where: raw("(is_active = true)"))
+  @@index([cpf_cnpj_hash], map: "idx_users_cpf_cnpj_hash", where: raw("(cpf_cnpj_hash IS NOT NULL)"))
+  @@index([role], map: "idx_users_role")
+  @@schema("nexa")
+}
+
+enum audit_action {
+  INSERT
+  UPDATE
+  DELETE
+  SELECT
+  LOGIN
+  LOGOUT
+  LOGIN_FAILED
+  PERMISSION_DENIED
+
+  @@schema("audit")
+}
+
+enum contract_status {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@schema("nexa")
+}
+
+enum demand_status {
+  PENDING
+  IN_PROGRESS
+  REVIEW
+  COMPLETED
+
+  @@schema("nexa")
+}
+
+enum demand_subfolder {
+  front
+  back
+  bd
+  imgs
+  git
+  commits
+  zip
+  referencias
+  contratos
+
+  @@schema("nexa")
+}
+
+enum financial_status {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+
+  @@schema("nexa")
+}
+
+enum financial_type {
+  PAYABLE
+  RECEIVABLE
+
+  @@schema("nexa")
+}
+
+enum notification_type {
+  CONTRACT_PENDING_SIGNATURE
+  TICKET_ASSIGNED
+  TICKET_RESPONSE
+  SLA_WARNING
+  SLA_BREACH
+  DEMAND_ASSIGNED
+  PROJECT_STATUS_CHANGED
+  PROFESSOR_COMMENT
+
+  @@schema("nexa")
+}
+
+enum project_status {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+
+  @@schema("nexa")
+}
+
+enum ticket_status {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+
+  @@schema("nexa")
+}
+
+enum user_role {
+  NIVEL_1
+  NIVEL_2
+  NIVEL_3
+  PROFESSOR
+  CLIENTE
+
+  @@schema("nexa")
+}
